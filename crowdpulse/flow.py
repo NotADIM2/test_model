@@ -12,7 +12,11 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .density import STRIDE, Density
+
 WORK_WIDTH = 640                               # frames are shrunk to this width first: flow is slow at full size
+STILL_BELOW = 12.0                             # pixels per second; slower cells are people shuffling in place
+STEADY_OVER = 4.0                              # seconds the motion is averaged over; real crowd motion persists, jitter does not
 
 
 @dataclass
@@ -60,3 +64,48 @@ def crowd_flow(before_bgr: np.ndarray, after_bgr: np.ndarray, seconds: float, ce
     full = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR)[:rows * cell, :cols * cell]
     vectors = full.reshape(rows, cell, cols, cell, 2).mean(axis=(1, 3))
     return Flow(vectors, cell)
+
+
+def people_per_cell(density: Density, flow: Flow) -> np.ndarray:
+    """(rows, cols) head count inside each flow cell."""
+    rows, cols = flow.vectors.shape[:2]
+    step = flow.cell * density.scale / STRIDE                # flow cell size in density-map cells
+    out = np.zeros((rows, cols), np.float32)
+    for r in range(rows):
+        for c in range(cols):
+            out[r, c] = density.grid[int(r * step):int((r + 1) * step), int(c * step):int((c + 1) * step)].sum()
+    return out
+
+
+class Steady:
+    """Averages each cell's motion over the last few seconds of a video, frame after frame."""
+
+    def __init__(self, seconds: float = STEADY_OVER):
+        self.seconds, self.vectors, self.last = seconds, None, None
+
+    def update(self, at: float, flow: Flow) -> Flow:
+        if self.vectors is None or self.vectors.shape != flow.vectors.shape:
+            self.vectors = flow.vectors.copy()
+        else:
+            self.vectors += (1 - np.exp(-(at - self.last) / self.seconds)) * (flow.vectors - self.vectors)
+        self.last = at
+        return Flow(self.vectors.copy(), flow.cell)
+
+
+def ahead(flow: Flow, people: np.ndarray, seconds: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Where each cell's people are now and will be after `seconds`, if they keep moving as they are.
+
+    Returns (people, now, later): people per cell and (x, y) positions, on a grid that reaches past the
+    picture's edges. Comparing who is inside a zone now with who will be inside it then gives the zone's
+    inflow, so a zone can be seen filling before its own density has risen. Cells slower than STILL_BELOW
+    stay put. The crowd just outside the picture is taken to look like the crowd at its edge, so people walk
+    in from off screen as well as out: a steady stream through the picture neither fills nor drains a zone.
+    """
+    moving = np.hypot(flow.vectors[..., 0], flow.vectors[..., 1]) >= STILL_BELOW
+    vectors = flow.vectors * moving[..., None]
+    pad = int(min(np.ceil(np.abs(vectors).max(initial=0) * seconds / flow.cell) + 1, 12))
+    vectors = np.pad(vectors, ((pad, pad), (pad, pad), (0, 0)), mode="edge")
+    people = np.pad(people, pad, mode="edge")
+    ys, xs = np.mgrid[0:people.shape[0], 0:people.shape[1]]
+    now = np.stack([(xs - pad + 0.5) * flow.cell, (ys - pad + 0.5) * flow.cell], axis=-1).astype(np.float32)
+    return people, now, now + vectors * seconds

@@ -1,0 +1,9 @@
+{
+  "frame_size": [1920, 1080],
+  "note": "Floor areas are estimates from the footage: balcony about 25 m x 2.5 m, staircase about 12 m x 2.5 m, concourse floor in view about 18 m x 14 m.",
+  "zones": [
+    {"name": "Balcony", "area_m2": 60, "polygon": [[0, 80], [300, 200], [700, 225], [1300, 215], [1330, 400], [400, 400], [0, 310]]},
+    {"name": "Staircase", "area_m2": 30, "polygon": [[1300, 300], [1550, 260], [1920, 420], [1920, 1080], [1700, 1080], [1550, 700], [1380, 450]]},
+    {"name": "Concourse", "area_m2": 250, "polygon": [[0, 420], [1250, 420], [1380, 520], [1560, 1080], [0, 1080]]}
+  ]
+}

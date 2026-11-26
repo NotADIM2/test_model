@@ -3,10 +3,11 @@ import cv2
 import numpy as np
 
 from .density import Density
-from .flow import Flow
+from .flow import STILL_BELOW, Flow, people_per_cell
+from .risk import Status
+from .zones import Zone
 
 ARROW_SECONDS = 1.0            # an arrow shows where that part of the crowd will be in this many seconds
-MIN_SPEED = 12.0               # pixels per second; slower cells get no arrow
 MIN_PEOPLE_PER_CELL = 0.4      # cells with fewer people than this get no arrow
 
 
@@ -23,25 +24,12 @@ def heatmap(frame: np.ndarray, density: Density, vmax: float | None = None) -> n
     return (frame * (1 - alpha) + colours * alpha).astype(np.uint8)
 
 
-def people_per_cell(density: Density, flow: Flow) -> np.ndarray:
-    """Head count inside each flow cell, so arrows are drawn only where there are people."""
-    rows, cols = flow.vectors.shape[:2]
-    cell_in_grid = flow.cell * density.scale / 8
-    out = np.zeros((rows, cols), np.float32)
-    for r in range(rows):
-        for c in range(cols):
-            y0, x0 = int(r * cell_in_grid), int(c * cell_in_grid)
-            y1, x1 = int((r + 1) * cell_in_grid), int((c + 1) * cell_in_grid)
-            out[r, c] = density.grid[y0:y1, x0:x1].sum()
-    return out
-
-
 def arrows(image: np.ndarray, density: Density, flow: Flow) -> np.ndarray:
     """White arrows showing which way the people in each cell are moving."""
     out = image.copy()
     people = people_per_cell(density, flow)
     for (cx, cy), (dx, dy), n in zip(flow.centres().reshape(-1, 2), flow.vectors.reshape(-1, 2), people.reshape(-1)):
-        if n < MIN_PEOPLE_PER_CELL or np.hypot(dx, dy) < MIN_SPEED:
+        if n < MIN_PEOPLE_PER_CELL or np.hypot(dx, dy) < STILL_BELOW:
             continue
         step = np.array([dx, dy]) * ARROW_SECONDS
         step *= min(1.0, flow.cell * 0.9 / max(np.hypot(*step), 1e-6))      # never longer than a cell
@@ -49,6 +37,34 @@ def arrows(image: np.ndarray, density: Density, flow: Flow) -> np.ndarray:
         end = (int(cx + step[0] / 2), int(cy + step[1] / 2))
         cv2.arrowedLine(out, start, end, (20, 20, 20), 5, cv2.LINE_AA, tipLength=0.35)
         cv2.arrowedLine(out, start, end, (255, 255, 255), 2, cv2.LINE_AA, tipLength=0.35)
+    return out
+
+
+LEVEL_COLOURS = {"green": (80, 175, 60), "amber": (0, 170, 255), "red": (40, 40, 220)}     # BGR
+
+
+def zones(image: np.ndarray, zone_list: list[Zone], statuses: dict[str, Status]) -> np.ndarray:
+    """Each zone outlined in its warning colour, with a tag giving its density and countdown."""
+    out = image.copy()
+    scale = max(image.shape[1] / 1600, 0.55)
+    for zone in zone_list:
+        status = statuses[zone.name]
+        colour = LEVEL_COLOURS[status.level]
+        points = np.round(zone.polygon).astype(np.int32)
+        cv2.polylines(out, [points], True, colour, max(2, int(3 * scale)), cv2.LINE_AA)
+        lines = [f"{zone.name}  {status.density:.1f}/m2  {status.level.upper()}"]
+        if status.inflow >= 1:
+            lines.append(f"+{status.inflow:.0f} people/min")
+        if status.minutes_to_critical is not None:
+            lines.append("CRITICAL NOW" if status.minutes_to_critical == 0 else f"critical in {status.minutes_to_critical:.0f} min")
+        x, y = points[:, 0].min() + 8, points[:, 1].min() + 8
+        x = min(max(x, 8), image.shape[1] - int(330 * scale))
+        y = min(max(y, int(70 * scale)), image.shape[0] - int(100 * scale))
+        for i, text in enumerate(lines):
+            (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6 * scale, 2)
+            top = y + i * int((th + base + 10))
+            cv2.rectangle(out, (x, top), (x + tw + 14, top + th + base + 8), colour, -1)
+            cv2.putText(out, text, (x + 7, top + th + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.6 * scale, (255, 255, 255), 2, cv2.LINE_AA)
     return out
 
 

@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
+.pytest_cache/
 *.pyc
 
 # Downloaded: get them again with scripts/get_model.py and the links in data/samples/CREDITS.md
