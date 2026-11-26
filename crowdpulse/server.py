@@ -5,17 +5,22 @@ its own address, and only accepts JSON for commands: together these stop a web p
 quietly driving it (starting the webcam, say) through the browser.
 """
 import json
+import queue
 import threading
 import time
 import traceback
 from collections import deque
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import cv2
 
+from . import overlay, report
 from .alerts import AlertLog
-from .engine import Analyser, VideoFile, Webcam
+from .engine import Analyser, VideoFile, Webcam, zone_records
+from .risk import ZoneTrend
+from .sim import Simulation
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = Path(__file__).resolve().parent / "web"
@@ -25,6 +30,11 @@ VIDEO_TYPES = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8")}
 FRAME_WIDTH = 1280                             # annotated frames are sent at most this wide
+SIM = "sim:stadium"
+SIM_FRAME = 2.0                                # simulated seconds per dashboard frame
+SIM_SPEED = 5.0                                # simulated seconds per real second
+SIM_LENGTH = 20 * 60                           # the scenario runs for 20 simulated minutes
+TIMELINE_MAX = 20_000                          # records kept for the report (about 5.5 hours at one a second)
 
 
 def videos() -> dict[str, Path]:
@@ -43,7 +53,8 @@ def zone_files() -> dict[str, Path]:
 
 def sources() -> dict:
     zones = zone_files()
-    items = [{"id": "webcam", "label": "Laptop webcam (live)", "zones": None}]
+    items = [{"id": SIM, "label": "Simulation: stadium entry surge", "zones": None},
+             {"id": "webcam", "label": "Laptop webcam (live)", "zones": None}]
     for name, path in videos().items():
         items.append({"id": name, "label": name, "zones": f"{path.stem}.json" if f"{path.stem}.json" in zones else None})
     return {"sources": items, "zones": list(zones)}
@@ -62,13 +73,19 @@ class Monitor:
         self.running, self.finished, self.error = False, False, None
         self.source = self.zones = None
         self.frame, self.frame_id, self.record = None, 0, None
-        self.history: deque[dict] = deque(maxlen=900)
+        self.history: deque[dict] = deque(maxlen=900)          # what the dashboard chart shows
+        self.timeline: deque[dict] = deque(maxlen=TIMELINE_MAX)  # the whole run, for the report
         self.alerts: deque[dict] = deque(maxlen=100)
+        self.all_alerts: list[dict] = []
+        self.done: list[dict] = []                               # operator actions in the simulation
+        self.worst = (-1.0, None, None)                          # (how bad, jpeg, record) of the worst frame so far
         self.alert_id = 0
         self.seconds_per_frame = None
+        self.sim_info = None
+        self.actions: queue.Queue = queue.Queue()
 
     def start(self, source: str, zones: str | None, every: float) -> None:
-        if source != "webcam" and source not in videos():
+        if source not in (SIM, "webcam") and source not in videos():
             raise ValueError("Unknown video")
         if zones is not None and zones not in zone_files():
             raise ValueError("Unknown zones file")
@@ -89,8 +106,39 @@ class Monitor:
         with self.lock:
             self.running = False
 
+    def act(self, action: str, gate: int | None) -> None:
+        """Queue an operator action for the running simulation; it applies before the next step."""
+        if self.source != SIM or not self.running:
+            raise ValueError("Actions work only while the simulation is running")
+        if action not in ("open_gate", "close_gate", "hold_arrivals", "stewards"):
+            raise ValueError("Unknown action")
+        self.actions.put((action, gate))
+
+    def publish(self, image, record: dict, alerts: list, started: float, sim_info: dict | None = None) -> None:
+        if image.shape[1] > FRAME_WIDTH:
+            image = cv2.resize(image, (FRAME_WIDTH, round(image.shape[0] * FRAME_WIDTH / image.shape[1])),
+                               interpolation=cv2.INTER_AREA)
+        jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 82])[1].tobytes()
+        badness = max((z["density"] for z in record["zones"]), default=record["people"] / 1e6)
+        with self.lock:
+            self.frame, self.frame_id, self.record = jpeg, self.frame_id + 1, record
+            self.history.append(record)
+            self.timeline.append(record)
+            if badness > self.worst[0]:
+                self.worst = (badness, jpeg, record)
+            for alert in alerts:
+                self.alert_id += 1
+                self.alerts.append({"id": self.alert_id, **alert.to_dict()})
+                if len(self.all_alerts) < TIMELINE_MAX:
+                    self.all_alerts.append(alert.to_dict())
+            self.seconds_per_frame = round(time.monotonic() - started, 2)
+            self.sim_info = sim_info
+
     def _run(self, source: str, zones: str | None, every: float) -> None:
         try:
+            if source == SIM:
+                self._run_simulation()
+                return
             feed = Webcam() if source == "webcam" else VideoFile(videos()[source], every)
             analyser = Analyser(feed.size, zone_files()[zones] if zones else None)
             log = AlertLog()
@@ -106,18 +154,7 @@ class Monitor:
                     analyser.set_colour_scale(step[1])
                     first = False
                 image, record, statuses = analyser.annotate(*step)
-                if image.shape[1] > FRAME_WIDTH:
-                    image = cv2.resize(image, (FRAME_WIDTH, round(image.shape[0] * FRAME_WIDTH / image.shape[1])),
-                                       interpolation=cv2.INTER_AREA)
-                jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 82])[1].tobytes()
-                new_alerts = log.update(step[0], statuses)
-                with self.lock:
-                    self.frame, self.frame_id, self.record = jpeg, self.frame_id + 1, record
-                    self.history.append(record)
-                    for alert in new_alerts:
-                        self.alert_id += 1
-                        self.alerts.append({"id": self.alert_id, **alert.to_dict()})
-                    self.seconds_per_frame = round(time.monotonic() - started, 2)
+                self.publish(image, record, log.update(step[0], statuses), started)
         except Exception as exc:                             # shown on the dashboard instead of dying silently
             traceback.print_exc()
             with self.lock:
@@ -126,14 +163,55 @@ class Monitor:
             with self.lock:
                 self.running = False
 
+    def _run_simulation(self) -> None:
+        """The stadium-entry scenario: a step of simulated time per frame, at SIM_SPEED times real time."""
+        sim = Simulation()
+        zones = sim.pixel_zones()
+        trends = {z.name: ZoneTrend(z.name, z.area_m2) for z in sim.zones}
+        log = AlertLog()
+        while not self.stopping.is_set() and sim.t < SIM_LENGTH:
+            started = time.monotonic()
+            while not self.actions.empty():
+                action, gate = self.actions.get()
+                try:
+                    sim.act(action, gate)
+                except ValueError:
+                    continue
+                if action in ("open_gate", "close_gate"):
+                    what = f"{'Opened' if action == 'open_gate' else 'Closed'} Gate {gate}"
+                elif action == "hold_arrivals":
+                    what = "Held new arrivals at the outer cordon" if sim.holding else "Released the people held at the cordon"
+                else:
+                    what = "Sent stewards to point people to the gate with the shortest wait" if sim.stewards else "Stood the stewards down"
+                with self.lock:
+                    self.done.append({"t": round(sim.t, 1), "what": what})
+            sim.advance(SIM_FRAME)
+            statuses = {name: trends[name].update(sim.t, r) for name, r in sim.readings().items()}
+            info = sim.info()
+            minutes, seconds = divmod(int(sim.t), 60)
+            caption = f"{minutes:02d}:{seconds:02d} simulated   {info['on_plaza']} people on the plaza"
+            image = overlay.zones(sim.render(caption), zones, statuses)
+            record = {"t": round(sim.t, 1), "people": float(info["on_plaza"]), "zones": zone_records(statuses)}
+            self.publish(image, record, log.update(sim.t, statuses), started, info)
+            self.stopping.wait(max(0.0, SIM_FRAME / SIM_SPEED - (time.monotonic() - started)))
+        with self.lock:
+            self.finished = sim.t >= SIM_LENGTH
+
     def state(self, since_alert: int = 0) -> dict:
         with self.lock:
-            return {"running": self.running, "finished": self.finished, "error": self.error,
+            return {"running": self.running, "finished": self.finished, "error": self.error, "sim": self.sim_info,
                     "source": self.source, "zones": self.zones, "frame_id": self.frame_id,
                     "record": self.record, "seconds_per_frame": self.seconds_per_frame,
                     "history": [{"t": r["t"], "people": r["people"],
                                  "zones": {z["name"]: z["density"] for z in r["zones"]}} for r in self.history],
                     "alerts": [a for a in self.alerts if a["id"] > since_alert]}
+
+    def report(self) -> str | None:
+        with self.lock:
+            if not self.timeline:
+                return None
+            source = "Simulation: stadium entry surge" if self.source == SIM else                 "Laptop webcam (live)" if self.source == "webcam" else f"{self.source}" + (f", zones {self.zones}" if self.zones else "")
+            return report.build(source, list(self.timeline), list(self.all_alerts), list(self.done), self.worst[1], self.worst[2])
 
     def latest_frame(self) -> bytes | None:
         with self.lock:
@@ -177,6 +255,19 @@ def make_handler(monitor: Monitor, port: int):
             elif path == "/api/state":
                 since = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("since", "0")
                 self.send_json(monitor.state(int(since) if since.isdigit() else 0))
+            elif path == "/api/report":
+                page = monitor.report()
+                if page is None:
+                    self.send_json({"error": "Nothing has been analysed yet"}, 404)
+                    return
+                body = page.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="crowdpulse-report-{datetime.now():%Y%m%d-%H%M}.html"')
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
             elif path == "/frame.jpg":
                 frame = monitor.latest_frame()
                 if frame is None:
@@ -200,6 +291,10 @@ def make_handler(monitor: Monitor, port: int):
                     self.send_json({"ok": True})
                 elif self.path == "/api/stop":
                     monitor.stop()
+                    self.send_json({"ok": True})
+                elif self.path == "/api/action":
+                    gate = body.get("gate")
+                    monitor.act(str(body["action"]), int(gate) if gate is not None else None)
                     self.send_json({"ok": True})
                 else:
                     self.send_json({"error": "Not found"}, 404)

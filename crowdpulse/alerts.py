@@ -4,7 +4,9 @@ Each alert says what is happening in plain words and what to do about it, for th
 """
 from dataclasses import asdict, dataclass
 
-from .risk import LEVELS, Status
+from .risk import AMBER_FROM, LEVELS, RED_FROM, Status
+
+SETTLE = 30.0                                  # seconds a zone must stay green before it is called back to normal
 
 
 @dataclass
@@ -27,28 +29,36 @@ def describe(status: Status) -> tuple[str, str]:
         countdown = " It is at a crush-risk level now." if status.minutes_to_critical == 0 else \
             f" At this rate it reaches crush-risk density in about {status.minutes_to_critical:.0f} minutes."
     if status.level == "red":
-        return (f"{status.name} is dangerously crowded: {status.density:.1f} people per m²{filling}.{countdown}",
+        state = "is dangerously crowded" if status.density >= RED_FROM else "is heading for a crush"
+        return (f"{status.name} {state}: {status.density:.1f} people per m²{filling}.{countdown}",
                 f"Stop people entering {status.name} now. Open every exit from it and send stewards to guide people out.")
     if status.level == "amber":
-        return (f"{status.name} is filling up: {status.density:.1f} people per m²{filling}.{countdown}",
+        state = "is crowded" if status.density >= AMBER_FROM else "is filling fast"
+        return (f"{status.name} {state}: {status.density:.1f} people per m²{filling}.{countdown}",
                 f"Slow the flow into {status.name}: hold people at its entrances and point them to another route.")
     return (f"{status.name} is back to normal: {status.density:.1f} people per m².", "No action needed. Keep watching.")
 
 
 class AlertLog:
-    """Turns each frame's zone statuses into alerts when a level changes."""
+    """Turns each frame's zone statuses into alerts: when a zone gets worse than it has been since it was last
+    back to normal, and when it has stayed green for SETTLE seconds. A zone hovering on a boundary alerts once."""
 
     def __init__(self):
-        self.levels: dict[str, str] = {}
+        self.worst: dict[str, str] = {}        # worst level announced for each zone since it was last back to normal
+        self.green_since: dict[str, float] = {}
 
     def update(self, t: float, statuses: dict[str, Status]) -> list[Alert]:
         new = []
         for name, status in statuses.items():
-            before = self.levels.get(name, "green")
-            self.levels[name] = status.level
-            worse = LEVELS.index(status.level) > LEVELS.index(before)
-            settled = status.level == "green" and before != "green"
+            worst = self.worst.get(name, "green")
+            if status.level == "green":
+                self.green_since.setdefault(name, t)
+            else:
+                self.green_since.pop(name, None)
+            worse = LEVELS.index(status.level) > LEVELS.index(worst)
+            settled = worst != "green" and status.level == "green" and t - self.green_since[name] >= SETTLE
             if worse or settled:
+                self.worst[name] = status.level
                 message, action = describe(status)
                 new.append(Alert(round(t, 1), name, status.level, message, action))
         return new

@@ -77,6 +77,14 @@ class Webcam:
         return seconds, frame, later, time.monotonic() - self.opened - seconds
 
 
+def zone_records(statuses: dict[str, Status]) -> list[dict]:
+    """Each zone's status as plain numbers, for the timeline, the dashboard and the report."""
+    return [{"name": s.name, "people": round(s.people, 1), "density": round(s.density, 2),
+             "inflow_per_min": round(s.inflow, 1), "level": s.level,
+             "minutes_to_critical": None if s.minutes_to_critical is None else round(s.minutes_to_critical, 1)}
+            for s in statuses.values()]
+
+
 class Analyser:
     def __init__(self, frame_size: tuple[int, int], zones_file: Path | None = None):
         self.model = DensityModel()
@@ -100,8 +108,5 @@ class Analyser:
         if self.zones:
             statuses = {name: self.trends[name].update(seconds, r) for name, r in measure(self.zones, density, flow).items()}
             image = overlay.zones(image, self.zones, statuses)
-            record["zones"] = [{"name": s.name, "people": round(s.people, 1), "density": round(s.density, 2),
-                                "inflow_per_min": round(s.inflow, 1), "level": s.level,
-                                "minutes_to_critical": None if s.minutes_to_critical is None else round(s.minutes_to_critical, 1)}
-                               for s in statuses.values()]
+            record["zones"] = zone_records(statuses)
         return overlay.label(image, f"{seconds:5.1f} s   about {density.count:.0f} people"), record, statuses

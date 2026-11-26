@@ -31,6 +31,7 @@
       </label>
       <button type="submit" id="start" class="primary">Start</button>
       <button type="button" id="stop" disabled>Stop</button>
+      <button type="button" id="report" disabled title="Download a report of this run as one HTML file">Save report</button>
       <label class="toggle"><input type="checkbox" id="sound" checked> Sound</label>
       <label class="toggle"><input type="checkbox" id="voice"> Read alerts aloud</label>
     </form>
@@ -51,6 +52,16 @@
     </section>
 
     <aside class="side">
+      <section class="card" id="sim-card" hidden>
+        <h2>Simulation controls</h2>
+        <p class="muted small">Act like the control room. Your changes apply within a few simulated seconds.</p>
+        <div id="gate-buttons" class="buttons"></div>
+        <div class="buttons">
+          <button type="button" id="hold" aria-pressed="false">Hold arrivals at the cordon</button>
+          <button type="button" id="stewards" aria-pressed="false">Send stewards to redirect</button>
+        </div>
+        <dl id="sim-stats" class="stats"></dl>
+      </section>
       <section class="card">
         <h2>Zones</h2>
         <div id="zone-list" class="zones"><p class="muted">Zones appear here once the analysis starts. Without a zones file, only the head count is shown.</p></div>

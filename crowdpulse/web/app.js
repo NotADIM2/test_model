@@ -6,11 +6,20 @@ const LEVELS = ["green", "amber", "red"];
 const LINE_COLOURS = ["#1d4ed8", "#7c3aed", "#0e7490", "#be185d", "#4d7c0f", "#c2410c"];
 const POLL_MS = 600;
 
+const SIM = "sim:stadium";
+
 let sources = [];
 let lastFrame = 0;
 let lastAlert = 0;
 let alertCount = 0;
 let audio = null;
+let simShown = "";
+
+function clock(seconds) {
+  if (seconds < 60) return `${seconds.toFixed(1)} s`;
+  const s = Math.floor(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -40,14 +49,46 @@ async function loadSources() {
   const none = el("option", "", "None (head count only)");
   none.value = "";
   zones.replaceChildren(none, ...data.zones.map((z) => { const o = el("option", "", z); o.value = z; return o; }));
-  const firstVideo = sources.find((s) => s.zones) || sources[0];
-  source.value = firstVideo.id;
+  source.value = sources[0].id;                     // the simulation: the one source that shows warnings
   matchZones();
 }
 
 function matchZones() {
   const chosen = sources.find((s) => s.id === $("source").value);
   $("zones").value = (chosen && chosen.zones) || "";
+  const isSim = $("source").value === SIM;           // the simulation has its own zones and timing
+  $("zones").disabled = isSim;
+  $("every").disabled = isSim;
+}
+
+// ---- simulation controls
+
+function renderSim(info) {
+  const card = $("sim-card");
+  card.hidden = !info;
+  if (!info) { simShown = ""; return; }
+  const key = JSON.stringify([info.gates, info.holding, info.stewards]);
+  if (key !== simShown) {                           // rebuild buttons only when something changed
+    simShown = key;
+    $("gate-buttons").replaceChildren(...info.gates.map((g) => {
+      const b = el("button", g.open ? "gate-open" : "gate-closed", `${g.name}: ${g.open ? "open" : "closed"}`);
+      b.type = "button";
+      b.title = g.open ? `Close ${g.name}` : `Open ${g.name}`;
+      b.addEventListener("click", () => act(g.open ? "close_gate" : "open_gate", g.number));
+      return b;
+    }));
+    $("hold").setAttribute("aria-pressed", String(info.holding));
+    $("hold").textContent = info.holding ? "Release arrivals" : "Hold arrivals at the cordon";
+    $("stewards").setAttribute("aria-pressed", String(info.stewards));
+    $("stewards").textContent = info.stewards ? "Stewards redirecting (stop)" : "Send stewards to redirect";
+  }
+  const rows = [["Arriving now", `${info.arrivals_per_min} a minute`], ["On the plaza", info.on_plaza],
+    ["Through the gates", info.entered], ["Held at the cordon", info.held]];
+  $("sim-stats").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", String(v))]));
+}
+
+function act(action, gate) {
+  api("/api/action", { action, gate: gate ?? null }).catch((err) => { $("status").textContent = err.message; });
 }
 
 // ---- sound and voice for alerts
@@ -117,7 +158,7 @@ function renderAlerts(alerts) {
   if (alertCount === 0) list.replaceChildren();
   for (const a of alerts) {
     const item = el("li", `alert ${a.level}`);
-    item.append(el("div", "when", `${a.t.toFixed(1)} s · ${a.zone} · ${a.level.toUpperCase()}`), el("div", "what", a.message), el("div", "do", a.action));
+    item.append(el("div", "when", `${clock(a.t)} · ${a.zone} · ${a.level.toUpperCase()}`), el("div", "what", a.message), el("div", "do", a.action));
     list.prepend(item);
     alertCount += 1;
     if (a.level !== "green") { beep(a.level); speak(a); }
@@ -156,8 +197,8 @@ function renderChart(history) {
   const t0 = history[0].t, t1 = history[history.length - 1].t;
   const x = (t) => left + ((t - t0) / Math.max(t1 - t0, 1)) * w;
   ctx.textAlign = "center"; ctx.textBaseline = "top";
-  ctx.fillText(`${t0.toFixed(0)} s`, left + 14, top + h + 6);
-  ctx.fillText(`${t1.toFixed(0)} s`, left + w - 14, top + h + 6);
+  ctx.fillText(clock(t0), left + 14, top + h + 6);
+  ctx.fillText(clock(t1), left + w - 14, top + h + 6);
   names.forEach((name, i) => {
     ctx.strokeStyle = LINE_COLOURS[i % LINE_COLOURS.length];
     ctx.lineWidth = 2;
@@ -180,13 +221,16 @@ function renderStatus(state) {
   } else if (state.record) {
     overall.className = zones.length ? `pill ${worst}` : "pill";
     overall.textContent = zones.length ? worst.toUpperCase() : state.running ? "Running" : "Stopped";
-    const speed = state.seconds_per_frame ? ` · ${state.seconds_per_frame.toFixed(1)} s per frame on this laptop` : "";
-    const where = state.source === "webcam" ? "Live webcam" : state.source;
-    const done = state.finished ? " · end of video" : !state.running ? " · stopped" : "";
-    $("status").textContent = `${where} · ${state.record.t.toFixed(1)} s · about ${Math.round(state.record.people)} people${speed}${done}`;
+    const isSim = state.source === SIM;
+    const speed = state.seconds_per_frame && !isSim ? ` · ${state.seconds_per_frame.toFixed(1)} s per frame on this laptop` : "";
+    const where = isSim ? "Simulation, 5× speed" : state.source === "webcam" ? "Live webcam" : state.source;
+    const done = state.finished ? (isSim ? " · scenario finished" : " · end of video") : !state.running ? " · stopped" : "";
+    const people = isSim ? `${Math.round(state.record.people)} people on the plaza` : `about ${Math.round(state.record.people)} people`;
+    $("status").textContent = `${where} · ${clock(state.record.t)} · ${people}${speed}${done}`;
   }
   $("start").disabled = state.running;
   $("stop").disabled = !state.running;
+  $("report").disabled = !state.frame_id;
 }
 
 async function poll() {
@@ -199,6 +243,7 @@ async function poll() {
       $("empty").hidden = true;
     }
     renderStatus(state);
+    renderSim(state.running || state.finished ? state.sim : null);
     renderZones(state.record);
     renderAlerts(state.alerts);
     if (state.alerts.length) lastAlert = state.alerts[state.alerts.length - 1].id;
@@ -227,6 +272,9 @@ $("controls").addEventListener("submit", async (event) => {
   }
 });
 $("stop").addEventListener("click", () => api("/api/stop", {}).catch(() => {}));
+$("report").addEventListener("click", () => { window.location.href = "/api/report"; });
+$("hold").addEventListener("click", () => act("hold_arrivals"));
+$("stewards").addEventListener("click", () => act("stewards"));
 
 loadSources().catch(() => { $("status").textContent = "Cannot reach the CrowdPulse server."; });
 poll();
