@@ -20,7 +20,8 @@ from . import overlay, report
 from .alerts import AlertLog
 from .engine import Analyser, VideoFile, Webcam, zone_records
 from .risk import ZoneTrend
-from .sim import Simulation
+from .density import STRIDE
+from .sim import PX, STEP, Simulation
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = Path(__file__).resolve().parent / "web"
@@ -31,6 +32,8 @@ STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js",
           "/style.css": ("style.css", "text/css; charset=utf-8")}
 FRAME_WIDTH = 1280                             # annotated frames are sent at most this wide
 SIM = "sim:stadium"
+SIM_THERMAL = "sim:stadium-thermal"
+SIMS = (SIM, SIM_THERMAL)
 SIM_FRAME = 2.0                                # simulated seconds per dashboard frame
 SIM_SPEED = 5.0                                # simulated seconds per real second
 SIM_LENGTH = 20 * 60                           # the scenario runs for 20 simulated minutes
@@ -54,6 +57,7 @@ def zone_files() -> dict[str, Path]:
 def sources() -> dict:
     zones = zone_files()
     items = [{"id": SIM, "label": "Simulation: stadium entry surge", "zones": None},
+             {"id": SIM_THERMAL, "label": "Simulation: same, seen by a thermal camera", "zones": None},
              {"id": "webcam", "label": "Laptop webcam (live)", "zones": None}]
     for name, path in videos().items():
         items.append({"id": name, "label": name, "zones": f"{path.stem}.json" if f"{path.stem}.json" in zones else None})
@@ -84,8 +88,8 @@ class Monitor:
         self.sim_info = None
         self.actions: queue.Queue = queue.Queue()
 
-    def start(self, source: str, zones: str | None, every: float) -> None:
-        if source not in (SIM, "webcam") and source not in videos():
+    def start(self, source: str, zones: str | None, every: float, thermal: bool = False) -> None:
+        if source not in (*SIMS, "webcam") and source not in videos():
             raise ValueError("Unknown video")
         if zones is not None and zones not in zone_files():
             raise ValueError("Unknown zones file")
@@ -96,7 +100,7 @@ class Monitor:
             self.reset()
             self.running, self.source, self.zones = True, source, zones
         self.stopping.clear()
-        self.thread = threading.Thread(target=self._run, args=(source, zones, every), daemon=True)
+        self.thread = threading.Thread(target=self._run, args=(source, zones, every, thermal), daemon=True)
         self.thread.start()
 
     def stop(self) -> None:
@@ -108,7 +112,7 @@ class Monitor:
 
     def act(self, action: str, gate: int | None) -> None:
         """Queue an operator action for the running simulation; it applies before the next step."""
-        if self.source != SIM or not self.running:
+        if self.source not in SIMS or not self.running:
             raise ValueError("Actions work only while the simulation is running")
         if action not in ("open_gate", "close_gate", "hold_arrivals", "stewards"):
             raise ValueError("Unknown action")
@@ -134,13 +138,13 @@ class Monitor:
             self.seconds_per_frame = round(time.monotonic() - started, 2)
             self.sim_info = sim_info
 
-    def _run(self, source: str, zones: str | None, every: float) -> None:
+    def _run(self, source: str, zones: str | None, every: float, thermal: bool) -> None:
         try:
-            if source == SIM:
-                self._run_simulation()
+            if source in SIMS:
+                self._run_simulation(thermal=source == SIM_THERMAL)
                 return
             feed = Webcam() if source == "webcam" else VideoFile(videos()[source], every)
-            analyser = Analyser(feed.size, zone_files()[zones] if zones else None)
+            analyser = Analyser(feed.size, zone_files()[zones] if zones else None, thermal=thermal)
             log = AlertLog()
             first = True
             while not self.stopping.is_set():
@@ -163,12 +167,21 @@ class Monitor:
             with self.lock:
                 self.running = False
 
-    def _run_simulation(self) -> None:
-        """The stadium-entry scenario: a step of simulated time per frame, at SIM_SPEED times real time."""
+    def _run_simulation(self, thermal: bool = False) -> None:
+        """The stadium-entry scenario: a step of simulated time per frame, at SIM_SPEED times real time.
+
+        Normally the zones' readings come straight from the simulated people. With `thermal`, the simulation is
+        drawn as a thermal camera would see it, and CrowdPulse has to count the people from those pixels alone.
+        """
         sim = Simulation()
         zones = sim.pixel_zones()
         trends = {z.name: ZoneTrend(z.name, z.area_m2) for z in sim.zones}
         log = AlertLog()
+        analyser = None
+        if thermal:
+            frame = sim.render_thermal()
+            analyser = Analyser((frame.shape[1], frame.shape[0]), thermal=True, zones=zones)
+            analyser.vmax = 6.0 * (STRIDE / PX) ** 2              # full red at 6 people per m2
         while not self.stopping.is_set() and sim.t < SIM_LENGTH:
             started = time.monotonic()
             while not self.actions.empty():
@@ -185,13 +198,25 @@ class Monitor:
                     what = "Sent stewards to point people to the gate with the shortest wait" if sim.stewards else "Stood the stewards down"
                 with self.lock:
                     self.done.append({"t": round(sim.t, 1), "what": what})
-            sim.advance(SIM_FRAME)
-            statuses = {name: trends[name].update(sim.t, r) for name, r in sim.readings().items()}
-            info = sim.info()
-            minutes, seconds = divmod(int(sim.t), 60)
-            caption = f"{minutes:02d}:{seconds:02d} simulated   {info['on_plaza']} people on the plaza"
-            image = overlay.zones(sim.render(caption), zones, statuses)
-            record = {"t": round(sim.t, 1), "people": float(info["on_plaza"]), "zones": zone_records(statuses)}
+            if analyser:                                          # two thermal frames a step apart, for movement
+                sim.advance(SIM_FRAME - STEP)
+                frame = sim.render_thermal()
+                sim.step()
+                info = sim.info()
+                minutes, seconds = divmod(int(sim.t), 60)
+                image, record, statuses = analyser.annotate(sim.t, frame, sim.render_thermal(), STEP,
+                                                            caption=f"{minutes:02d}:{seconds:02d} thermal view")
+                record["t"] = round(sim.t, 1)
+                cv2.putText(image, f"Counted from heat: {record['people']:.0f}   Really on the plaza: {info['on_plaza']}",
+                            (12, image.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            else:
+                sim.advance(SIM_FRAME)
+                statuses = {name: trends[name].update(sim.t, r) for name, r in sim.readings().items()}
+                info = sim.info()
+                minutes, seconds = divmod(int(sim.t), 60)
+                caption = f"{minutes:02d}:{seconds:02d} simulated   {info['on_plaza']} people on the plaza"
+                image = overlay.zones(sim.render(caption), zones, statuses)
+                record = {"t": round(sim.t, 1), "people": float(info["on_plaza"]), "zones": zone_records(statuses)}
             self.publish(image, record, log.update(sim.t, statuses), started, info)
             self.stopping.wait(max(0.0, SIM_FRAME / SIM_SPEED - (time.monotonic() - started)))
         with self.lock:
@@ -210,7 +235,14 @@ class Monitor:
         with self.lock:
             if not self.timeline:
                 return None
-            source = "Simulation: stadium entry surge" if self.source == SIM else                 "Laptop webcam (live)" if self.source == "webcam" else f"{self.source}" + (f", zones {self.zones}" if self.zones else "")
+            if self.source == SIM:
+                source = "Simulation: stadium entry surge"
+            elif self.source == SIM_THERMAL:
+                source = "Simulation: stadium entry surge, counted from a thermal camera view"
+            elif self.source == "webcam":
+                source = "Laptop webcam (live)"
+            else:
+                source = self.source + (f", zones {self.zones}" if self.zones else "")
             return report.build(source, list(self.timeline), list(self.all_alerts), list(self.done), self.worst[1], self.worst[2])
 
     def latest_frame(self) -> bytes | None:
@@ -287,7 +319,8 @@ def make_handler(monitor: Monitor, port: int):
                 length = min(int(self.headers.get("Content-Length", 0)), 10_000)
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if self.path == "/api/start":
-                    monitor.start(str(body["source"]), body.get("zones") or None, float(body.get("every", 1.0)))
+                    monitor.start(str(body["source"]), body.get("zones") or None, float(body.get("every", 1.0)),
+                                  bool(body.get("thermal", False)))
                     self.send_json({"ok": True})
                 elif self.path == "/api/stop":
                     monitor.stop()

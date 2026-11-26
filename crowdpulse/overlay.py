@@ -56,7 +56,8 @@ def zones(image: np.ndarray, zone_list: list[Zone], statuses: dict[str, Status])
         if status.inflow >= 1:
             lines.append(f"+{status.inflow:.0f} people/min")
         if status.minutes_to_critical is not None:
-            lines.append("CRITICAL NOW" if status.minutes_to_critical == 0 else f"critical in {status.minutes_to_critical:.0f} min")
+            lines.append("CRITICAL NOW" if status.minutes_to_critical == 0 else
+                         "critical in <1 min" if status.minutes_to_critical < 1 else f"critical in {status.minutes_to_critical:.0f} min")
         x, y = points[:, 0].min() + 8, points[:, 1].min() + 8
         x = min(max(x, 8), image.shape[1] - int(330 * scale))
         y = min(max(y, int(70 * scale)), image.shape[0] - int(100 * scale))

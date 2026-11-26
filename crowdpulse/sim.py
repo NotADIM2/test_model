@@ -227,6 +227,22 @@ class Simulation:
             cv2.putText(image, caption, (12, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (235, 235, 235), 2, cv2.LINE_AA)
         return image
 
+    def render_thermal(self, rng: np.random.Generator | None = None) -> np.ndarray:
+        """What a white-hot thermal camera over the plaza would show: each person a warm blob about 0.4 m across
+        on cool paving, with sensor noise. Same size as render(), so the zones line up."""
+        rng = rng or self.rng
+        h, w = TOP + int(DEPTH * PX), int(WIDTH * PX)
+        heat = np.zeros((h, w), np.float32)
+        if len(self.pos):
+            px = (self.pos * PX + [0, TOP]).astype(int)
+            np.add.at(heat, (np.clip(px[:, 1], 0, h - 1), np.clip(px[:, 0], 0, w - 1)), 1.0)
+        body = 0.2 * PX / 1.5                                  # blur so a lone person peaks well above the ground
+        heat = cv2.GaussianBlur(heat, (0, 0), body) * (2 * np.pi * body ** 2) * 0.55
+        ground = 0.22 + 0.04 * np.linspace(0, 1, h, dtype=np.float32)[:, None]   # paving a little warmer in the sun
+        image = np.clip(ground + np.minimum(heat, 0.7) + rng.normal(0, 0.015, (h, w)).astype(np.float32), 0, 1)
+        image[:TOP] = 0.12                                     # the stadium wall, cooler than the paving
+        return cv2.cvtColor((image * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+
     def info(self) -> dict:
         return {"gates": [{"number": i + 1, "name": g.name, "open": g.open} for i, g in enumerate(self.gates)],
                 "holding": self.holding, "stewards": self.stewards, "held": self.held,

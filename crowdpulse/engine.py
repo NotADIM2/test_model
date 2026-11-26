@@ -13,7 +13,8 @@ from . import overlay
 from .density import DensityModel
 from .flow import Steady, crowd_flow
 from .risk import Status, ZoneTrend
-from .zones import load_zones, measure
+from .thermal import ThermalModel
+from .zones import Zone, load_zones, measure
 
 FLOW_GAP = 0.25                                # seconds between the two frames compared for movement
 
@@ -86,9 +87,14 @@ def zone_records(statuses: dict[str, Status]) -> list[dict]:
 
 
 class Analyser:
-    def __init__(self, frame_size: tuple[int, int], zones_file: Path | None = None):
-        self.model = DensityModel()
-        self.zones = load_zones(zones_file, frame_size) if zones_file else []
+    """`thermal` reads a thermal camera (see thermal.py) instead of ordinary video. Zones come from a file, or
+    are given directly in frame pixels."""
+
+    def __init__(self, frame_size: tuple[int, int], zones_file: Path | None = None, thermal: bool = False,
+                 zones: list[Zone] | None = None):
+        self.model = ThermalModel() if thermal else DensityModel()
+        self.thermal = thermal
+        self.zones = zones if zones is not None else load_zones(zones_file, frame_size) if zones_file else []
         self.trends = {z.name: ZoneTrend(z.name, z.area_m2) for z in self.zones}
         self.steady = Steady()
         self.vmax = None
@@ -98,7 +104,8 @@ class Analyser:
         grid = cv2.GaussianBlur(self.model.predict(frame).grid, (0, 0), sigmaX=1.5)
         self.vmax = max(float(np.percentile(grid, 99.5)) * 1.3, 1e-3)
 
-    def annotate(self, seconds: float, frame: np.ndarray, later: np.ndarray, gap: float) -> tuple[np.ndarray, dict, dict[str, Status]]:
+    def annotate(self, seconds: float, frame: np.ndarray, later: np.ndarray, gap: float,
+                 caption: str | None = None) -> tuple[np.ndarray, dict, dict[str, Status]]:
         """The annotated frame, that frame's readings as a dict, and each zone's status."""
         density = self.model.predict(frame)
         flow = self.steady.update(seconds, crowd_flow(frame, later, gap))
@@ -109,4 +116,5 @@ class Analyser:
             statuses = {name: self.trends[name].update(seconds, r) for name, r in measure(self.zones, density, flow).items()}
             image = overlay.zones(image, self.zones, statuses)
             record["zones"] = zone_records(statuses)
-        return overlay.label(image, f"{seconds:5.1f} s   about {density.count:.0f} people"), record, statuses
+        caption = caption or f"{seconds:5.1f} s   about {density.count:.0f} people" + ("   (thermal)" if self.thermal else "")
+        return overlay.label(image, caption), record, statuses

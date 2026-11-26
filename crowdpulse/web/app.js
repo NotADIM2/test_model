@@ -6,7 +6,7 @@ const LEVELS = ["green", "amber", "red"];
 const LINE_COLOURS = ["#1d4ed8", "#7c3aed", "#0e7490", "#be185d", "#4d7c0f", "#c2410c"];
 const POLL_MS = 600;
 
-const SIM = "sim:stadium";
+const SIMS = ["sim:stadium", "sim:stadium-thermal"];
 
 let sources = [];
 let lastFrame = 0;
@@ -14,6 +14,7 @@ let lastAlert = 0;
 let alertCount = 0;
 let audio = null;
 let simShown = "";
+let synced = false;
 
 function clock(seconds) {
   if (seconds < 60) return `${seconds.toFixed(1)} s`;
@@ -56,9 +57,10 @@ async function loadSources() {
 function matchZones() {
   const chosen = sources.find((s) => s.id === $("source").value);
   $("zones").value = (chosen && chosen.zones) || "";
-  const isSim = $("source").value === SIM;           // the simulation has its own zones and timing
+  const isSim = SIMS.includes($("source").value);   // the simulation has its own zones, camera and timing
   $("zones").disabled = isSim;
   $("every").disabled = isSim;
+  $("camera").disabled = isSim;
 }
 
 // ---- simulation controls
@@ -145,7 +147,8 @@ function renderZones(record) {
     meta.append(`${Math.round(z.people)} people · ${flow}`);
     if (z.minutes_to_critical !== null) {
       meta.append(" · ");
-      meta.append(el("b", "", z.minutes_to_critical === 0 ? "crush-risk density now" : `critical in about ${Math.round(z.minutes_to_critical)} min`));
+      const m = z.minutes_to_critical;
+      meta.append(el("b", "", m === 0 ? "crush-risk density now" : m < 1 ? "critical in under a minute" : `critical in about ${Math.round(m)} min`));
     }
     card.append(meta);
     return card;
@@ -221,11 +224,11 @@ function renderStatus(state) {
   } else if (state.record) {
     overall.className = zones.length ? `pill ${worst}` : "pill";
     overall.textContent = zones.length ? worst.toUpperCase() : state.running ? "Running" : "Stopped";
-    const isSim = state.source === SIM;
+    const isSim = SIMS.includes(state.source);
     const speed = state.seconds_per_frame && !isSim ? ` · ${state.seconds_per_frame.toFixed(1)} s per frame on this laptop` : "";
-    const where = isSim ? "Simulation, 5× speed" : state.source === "webcam" ? "Live webcam" : state.source;
+    const where = isSim ? `Simulation${state.source === SIMS[1] ? ", thermal view" : ""}, 5× speed` : state.source === "webcam" ? "Live webcam" : state.source;
     const done = state.finished ? (isSim ? " · scenario finished" : " · end of video") : !state.running ? " · stopped" : "";
-    const people = isSim ? `${Math.round(state.record.people)} people on the plaza` : `about ${Math.round(state.record.people)} people`;
+    const people = state.source === SIMS[0] ? `${Math.round(state.record.people)} people on the plaza` : `about ${Math.round(state.record.people)} people`;
     $("status").textContent = `${where} · ${clock(state.record.t)} · ${people}${speed}${done}`;
   }
   $("start").disabled = state.running;
@@ -236,6 +239,14 @@ function renderStatus(state) {
 async function poll() {
   try {
     const state = await api(`/api/state?since=${lastAlert}`);
+    if (!synced && sources.length) {                // after a reload, show what is already running
+      synced = true;
+      if (state.running && sources.some((s) => s.id === state.source)) {
+        $("source").value = state.source;
+        matchZones();
+        if (state.zones) $("zones").value = state.zones;
+      }
+    }
     if (state.frame_id && state.frame_id !== lastFrame) {
       lastFrame = state.frame_id;
       $("frame").src = `/frame.jpg?n=${lastFrame}`;
@@ -266,7 +277,8 @@ $("controls").addEventListener("submit", async (event) => {
   $("alert-count").textContent = "";
   $("frame").hidden = true; $("empty").hidden = false;
   try {
-    await api("/api/start", { source: $("source").value, zones: $("zones").value || null, every: Number($("every").value) });
+    await api("/api/start", { source: $("source").value, zones: $("zones").value || null, every: Number($("every").value),
+                              thermal: $("camera").value === "thermal" });
   } catch (err) {
     $("status").textContent = `Could not start: ${err.message}`;
   }

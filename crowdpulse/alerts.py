@@ -4,7 +4,7 @@ Each alert says what is happening in plain words and what to do about it, for th
 """
 from dataclasses import asdict, dataclass
 
-from .risk import AMBER_FROM, LEVELS, RED_FROM, Status
+from .risk import AMBER_FROM, LEVELS, RED_FROM, Status, countdown
 
 SETTLE = 30.0                                  # seconds a zone must stay green before it is called back to normal
 
@@ -24,17 +24,17 @@ class Alert:
 def describe(status: Status) -> tuple[str, str]:
     """(what is happening, what to do) for a zone at its current level."""
     filling = f", {status.inflow:.0f} people a minute walking in" if status.inflow >= 1 else ""
-    countdown = ""
+    until = ""
     if status.minutes_to_critical is not None:
-        countdown = " It is at a crush-risk level now." if status.minutes_to_critical == 0 else \
-            f" At this rate it reaches crush-risk density in about {status.minutes_to_critical:.0f} minutes."
+        until = " It is at a crush-risk level now." if status.minutes_to_critical == 0 else \
+            f" At this rate it reaches crush-risk density in {countdown(status.minutes_to_critical)}."
     if status.level == "red":
         state = "is dangerously crowded" if status.density >= RED_FROM else "is heading for a crush"
-        return (f"{status.name} {state}: {status.density:.1f} people per m²{filling}.{countdown}",
+        return (f"{status.name} {state}: {status.density:.1f} people per m²{filling}.{until}",
                 f"Stop people entering {status.name} now. Open every exit from it and send stewards to guide people out.")
     if status.level == "amber":
         state = "is crowded" if status.density >= AMBER_FROM else "is filling fast"
-        return (f"{status.name} {state}: {status.density:.1f} people per m²{filling}.{countdown}",
+        return (f"{status.name} {state}: {status.density:.1f} people per m²{filling}.{until}",
                 f"Slow the flow into {status.name}: hold people at its entrances and point them to another route.")
     return (f"{status.name} is back to normal: {status.density:.1f} people per m².", "No action needed. Keep watching.")
 

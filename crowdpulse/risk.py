@@ -27,6 +27,15 @@ HOLD = 10.0                                    # seconds an early warning must l
 LEVELS = ("green", "amber", "red")
 
 
+def countdown(minutes: float) -> str:
+    """How long until critical, in words: "now", "under a minute" or "about 6 minutes"."""
+    if minutes == 0:
+        return "now"
+    if minutes < 1:
+        return "under a minute"
+    return f"about {minutes:.0f} minute{'s' if round(minutes) != 1 else ''}"
+
+
 def level_of(density: float) -> str:
     return "red" if density >= RED_FROM else "amber" if density >= AMBER_FROM else "green"
 
@@ -44,7 +53,7 @@ class Status:
     def summary(self) -> str:
         words = f"{self.name}: {self.density:.1f} people/m2, {self.level}"
         if self.minutes_to_critical is not None:
-            words += " (critical now)" if self.minutes_to_critical == 0 else f", critical in about {self.minutes_to_critical:.0f} min"
+            words += " (critical now)" if self.minutes_to_critical == 0 else f", critical in {countdown(self.minutes_to_critical)}"
         return words
 
 

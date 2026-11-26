@@ -40,3 +40,8 @@ def test_an_early_warning_says_where_the_zone_is_heading_not_that_it_is_already_
     [red] = log.update(60, {"Gate 6": status("red", density=1.7, inflow=167, minutes=2)})
     assert amber.message.startswith("Gate 6 is filling fast: 0.6 people per m²")
     assert red.message.startswith("Gate 6 is heading for a crush: 1.7 people per m²") and "about 2 minutes" in red.message
+
+
+def test_countdowns_under_a_minute_are_not_rounded_to_zero():
+    from crowdpulse.risk import countdown
+    assert [countdown(m) for m in (0, 0.4, 1.2, 6.4)] == ["now", "under a minute", "about 1 minute", "about 6 minutes"]

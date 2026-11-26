@@ -29,6 +29,7 @@ def main() -> None:
     parser.add_argument("--start", type=float, default=0.0)
     parser.add_argument("--end", type=float)
     parser.add_argument("--every", type=float, default=0.5, help="seconds of video between analysed frames")
+    parser.add_argument("--thermal", action="store_true", help="the video is from a thermal camera (white-hot)")
     args = parser.parse_args()
 
     try:
@@ -36,7 +37,7 @@ def main() -> None:
     except OSError as exc:
         sys.exit(str(exc))
     OUT.mkdir(exist_ok=True)
-    analyser = Analyser(video.size, args.zones)
+    analyser = Analyser(video.size, args.zones, thermal=args.thermal)
 
     if args.at is not None:
         pair = video.pair_at(args.at)
