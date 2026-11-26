@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CrowdPulse</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <h1>CrowdPulse</h1>
+        <p>Crowd-crush early warning · running on this laptop only</p>
+      </div>
+    </div>
+    <form class="controls" id="controls">
+      <label>Camera or video
+        <select id="source"></select>
+      </label>
+      <label>Zones
+        <select id="zones"></select>
+      </label>
+      <label>Analyse every
+        <select id="every">
+          <option value="0.5">0.5 s</option>
+          <option value="1" selected>1 s</option>
+          <option value="2">2 s</option>
+        </select>
+      </label>
+      <button type="submit" id="start" class="primary">Start</button>
+      <button type="button" id="stop" disabled>Stop</button>
+      <label class="toggle"><input type="checkbox" id="sound" checked> Sound</label>
+      <label class="toggle"><input type="checkbox" id="voice"> Read alerts aloud</label>
+    </form>
+  </header>
+
+  <div class="status" id="status-row">
+    <span class="pill" id="overall">Idle</span>
+    <span id="status">Pick a video or the webcam, then press Start.</span>
+  </div>
+
+  <main class="grid">
+    <section class="card viewer">
+      <div class="empty" id="empty">
+        <strong>Nothing running yet</strong>
+        <span>Choose a camera or video above and press Start. The first frame takes a few seconds.</span>
+      </div>
+      <img id="frame" alt="Camera view with crowd density, movement arrows and zones" hidden>
+    </section>
+
+    <aside class="side">
+      <section class="card">
+        <h2>Zones</h2>
+        <div id="zone-list" class="zones"><p class="muted">Zones appear here once the analysis starts. Without a zones file, only the head count is shown.</p></div>
+      </section>
+      <section class="card">
+        <h2>Alerts <span class="muted" id="alert-count"></span></h2>
+        <ol id="alerts" class="alerts"><li class="muted">No alerts. A zone that turns amber or red shows up here with what to do.</li></ol>
+      </section>
+    </aside>
+
+    <section class="card chart-card">
+      <div class="chart-head">
+        <h2>Density by zone <span class="muted">people per m²</span></h2>
+        <div id="legend" class="legend"></div>
+      </div>
+      <canvas id="chart" height="220"></canvas>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

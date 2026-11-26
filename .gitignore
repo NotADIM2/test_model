@@ -10,3 +10,7 @@ data/samples/*.mp4
 
 # Generated output
 out/
+
+# Your own footage stays on this laptop
+data/videos/*
+!data/videos/README.txt

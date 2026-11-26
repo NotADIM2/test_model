@@ -38,7 +38,7 @@ class Status:
     density: float                             # people per m2, smoothed
     inflow: float                              # people per minute crossing in, smoothed
     rate: float                                # people per m2 per minute the zone is filling at (0 if not)
-    minutes_to_critical: float | None          # None when the zone is not heading for critical
+    minutes_to_critical: float | None          # None unless the zone is amber or red and heading for critical
     level: str                                 # green, amber or red, including the early warning
 
     def summary(self) -> str:
@@ -100,6 +100,6 @@ class ZoneTrend:
                     level = max(level, name, key=LEVELS.index)
             else:
                 self.early_since.pop(name, None)
-        if minutes is not None and minutes > AMBER_WITHIN * 3:
-            minutes = None                                    # too far off to be worth saying
+        if level == "green":
+            minutes = None                                    # a countdown on a green zone would alarm for nothing
         return Status(self.name, self.people, self.density, self.inflow, rate if rate >= MIN_RATE else 0.0, minutes, level)

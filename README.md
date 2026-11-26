@@ -28,9 +28,25 @@ CrowdPulse counts people. It does not recognise anyone: no faces are detected, s
   crowd along its arrow for 5 seconds) and its density trend give a countdown, "critical in about 6 minutes".
   A zone that people are pouring into turns amber or red before it is packed.
 
-![Saint-Lazare station: the balcony is packed, people stream down the stairs](docs/day1-saint-lazare.jpg)
+- **Local dashboard:** pick a video or the laptop's webcam and watch the analysis live in the browser: the
+  annotated view, a card per zone, density over time, and alerts with what to do, a sound, and optionally a
+  voice reading them aloud. It runs only on this laptop; nothing is sent anywhere.
 
-## Run it
+![CrowdPulse dashboard watching Saint-Lazare station](docs/dashboard.jpg)
+
+## Run the dashboard
+
+```bash
+.venv\Scripts\python scripts\dashboard.py --open
+```
+
+It opens http://127.0.0.1:8765. Only this laptop can reach it: it listens on 127.0.0.1, refuses requests
+addressed to any other host name, and takes commands only as JSON, so a web page in another tab cannot drive it.
+Put your own videos in `data/videos/` and draw their zones with `scripts/draw_zones.py`; a zones file with the
+same name as the video (`canteen.mp4`, `canteen.json`) is picked automatically. Each frame takes about 2-3 s on
+a laptop CPU, so "Analyse every 2 s" keeps a live webcam closest to real time.
+
+## Run it from the command line
 
 Requires Python 3.12.
 
@@ -66,6 +82,11 @@ Results go to `out/`. The sample videos are listed, with links, in [`data/sample
 | `crowdpulse/zones.py` | Loads zones; measures each zone's people, density and inflow |
 | `crowdpulse/risk.py` | Follows each zone over time: warning level and minutes to critical |
 | `crowdpulse/overlay.py` | Draws the heatmap, the arrows, the zones and the count |
+| `crowdpulse/engine.py` | Video and webcam sources, and the analysis of each frame |
+| `crowdpulse/alerts.py` | An alert with what to do each time a zone's level rises |
+| `crowdpulse/server.py` | The local dashboard's web server (127.0.0.1 only) |
+| `crowdpulse/web/` | The dashboard page |
+| `scripts/dashboard.py` | Starts the dashboard |
 | `scripts/analyse.py` | Annotates one frame or a clip of a video |
 | `scripts/draw_zones.py` | Draw zones on a video frame by clicking |
 | `scripts/get_model.py` | Downloads the model and verifies it |
