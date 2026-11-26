@@ -22,6 +22,7 @@ AMBER_FROM, RED_FROM, CRITICAL = 2.0, 4.0, 5.0
 AMBER_WITHIN, RED_WITHIN = 10.0, 3.0           # minutes to critical that raise the warning
 SMOOTHING = 5.0                                # seconds; readings are averaged over about this long
 TREND_WINDOW = 30.0                            # seconds of history used to measure how fast density rises
+TREND_FROM = 20.0                              # seconds of history needed first: a shorter rise can be noise
 MIN_RATE = 0.01                                # people per m2 per minute; slower than this is not "filling"
 HOLD = 10.0                                    # seconds an early warning must last before it is raised
 LEVELS = ("green", "amber", "red")
@@ -83,7 +84,7 @@ class ZoneTrend:
 
     def slope(self) -> float:
         """People per m2 per minute over the trend window, by a straight-line fit."""
-        if len(self.history) < 3 or self.history[-1][0] - self.history[0][0] < 5:
+        if len(self.history) < 3 or self.history[-1][0] - self.history[0][0] < TREND_FROM:
             return 0.0
         t, d = np.array(self.history).T
         return float(np.polyfit(t, d, 1)[0] * 60)

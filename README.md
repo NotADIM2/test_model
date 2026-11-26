@@ -51,13 +51,27 @@ CrowdPulse counts people. It does not recognise anyone: no faces are detected, s
 
 ![The simulation: Gate 3 is jammed and red while the other gates are closed](docs/simulation.jpg)
 
+- **30-second forecast:** each patch of crowd is walked forward along its movement arrows; people who reach a
+  part of the crowd that is standing still stop there. A dashed outline on the video shows where the crowd will
+  be in 30 s, each zone card gives its density in 30 s, and the chart continues each zone's line 30 s ahead.
+  In the simulation it runs ahead of reality: at 5:00 Gate 3 held 1.5 people per m², the forecast said 2.6, and
+  30 s later it was 2.3. It reads a little high because it does not know the gate lets people through.
+
+![Forecast on the station footage: dashed outlines where the crowd will be in 30 seconds](docs/forecast.jpg)
+
 ## Run the dashboard
 
+**Double-click `CrowdPulse.bat`.** The first time, it sets itself up: it installs the Python packages and
+downloads the crowd model (a few minutes, and the internet is needed once). After that it opens the dashboard in
+a couple of seconds. You need Python 3.10 or newer (3.12 recommended) from https://www.python.org/downloads/.
+`.venv\Scripts\python scripts\make_shortcut.py` puts a CrowdPulse shortcut on the desktop. From a terminal:
+
 ```bash
-.venv\Scripts\python scripts\dashboard.py --open
+.venv\Scripts\python scripts\dashboard.py --open      # start and open the browser
+.venv\Scripts\python scripts\dashboard.py --check     # only check the setup and say what to fix
 ```
 
-It opens http://127.0.0.1:8765. Only this laptop can reach it: it listens on 127.0.0.1, refuses requests
+It opens http://127.0.0.1:8765, or just opens the browser if CrowdPulse is already running. Only this laptop can reach it: it listens on 127.0.0.1, refuses requests
 addressed to any other host name, and takes commands only as JSON, so a web page in another tab cannot drive it.
 Put your own videos in `data/videos/` and draw their zones with `scripts/draw_zones.py`; a zones file with the
 same name as the video (`canteen.mp4`, `canteen.json`) is picked automatically. Each frame takes about 2-3 s on
@@ -103,13 +117,16 @@ Results go to `out/`. The sample videos are listed, with links, in [`data/sample
 | `crowdpulse/risk.py` | Follows each zone over time: warning level and minutes to critical |
 | `crowdpulse/overlay.py` | Draws the heatmap, the arrows, the zones and the count |
 | `crowdpulse/thermal.py` | Counts people in thermal footage from their warm area |
+| `crowdpulse/forecast.py` | Where the crowd will be in 30 s, and each zone's density then |
 | `crowdpulse/engine.py` | Video and webcam sources, and the analysis of each frame |
 | `crowdpulse/alerts.py` | An alert with what to do each time a zone's level rises |
 | `crowdpulse/sim.py` | The stadium-entry simulation, and how a normal or thermal camera would see it |
 | `crowdpulse/report.py` | The incident report |
 | `crowdpulse/server.py` | The local dashboard's web server (127.0.0.1 only) |
 | `crowdpulse/web/` | The dashboard page |
-| `scripts/dashboard.py` | Starts the dashboard |
+| `CrowdPulse.bat` | Double-click to set up (first time) and start the dashboard |
+| `scripts/dashboard.py` | Starts the dashboard, after checking the setup |
+| `scripts/make_shortcut.py` | Puts a CrowdPulse shortcut on the desktop |
 | `scripts/analyse.py` | Annotates one frame or a clip of a video |
 | `scripts/draw_zones.py` | Draw zones on a video frame by clicking |
 | `scripts/get_model.py` | Downloads the model and verifies it |
@@ -129,6 +146,8 @@ Results go to `out/`. The sample videos are listed, with links, in [`data/sample
   footage. It undercounts packed crowds (people pressed together merge into one warm area), needs a few
   separate people in view to measure one person's size, and assumes white-hot footage. A camera that changes its
   brightness scale on its own (auto gain) shifts what counts as warm.
+- **The forecast assumes people keep going.** It walks each patch of crowd along today's arrows; it cannot know
+  that someone will turn back, or that a gate lets people through. It only moves people already in view.
 - **Moving cameras.** Zones are drawn on fixed pixel positions. A fixed CCTV camera keeps them aligned; a hand-held
   sample clip drifts a little.
 

@@ -4,6 +4,7 @@ import numpy as np
 
 from .density import Density
 from .flow import STILL_BELOW, Flow, people_per_cell
+from .forecast import Forecast
 from .risk import Status
 from .zones import Zone
 
@@ -37,6 +38,51 @@ def arrows(image: np.ndarray, density: Density, flow: Flow) -> np.ndarray:
         end = (int(cx + step[0] / 2), int(cy + step[1] / 2))
         cv2.arrowedLine(out, start, end, (20, 20, 20), 5, cv2.LINE_AA, tipLength=0.35)
         cv2.arrowedLine(out, start, end, (255, 255, 255), 2, cv2.LINE_AA, tipLength=0.35)
+    return out
+
+
+DASH = 14                      # pixels per dash of the forecast outline
+
+
+def _dashed(image: np.ndarray, points: np.ndarray, colour: tuple, thickness: int) -> None:
+    """A dashed closed line through `points`."""
+    travelled = 0.0
+    for a, b in zip(points, np.roll(points, -1, axis=0)):
+        length = float(np.hypot(*(b - a)))
+        for start in np.arange(0.0, length, DASH):
+            if int((travelled + start) // DASH) % 2 == 0:
+                end = min(start + DASH, length)
+                p, q = a + (b - a) * start / max(length, 1e-6), a + (b - a) * end / max(length, 1e-6)
+                cv2.line(image, tuple(int(v) for v in p), tuple(int(v) for v in q), colour, thickness, cv2.LINE_AA)
+        travelled += length
+
+
+def forecast(image: np.ndarray, ahead: Forecast, level: float) -> np.ndarray:
+    """A dashed outline around where the crowd will be dense in `ahead.seconds`: wherever its density reaches
+    `level` people per pixel. Compared with the heatmap under it, it shows where people are about to collect."""
+    out = image.copy()
+    h, w = image.shape[:2]
+    rows, cols = ahead.grid.shape
+    quarter = np.zeros((h // 4, w // 4), np.float32)                     # work at a quarter size: smooth and quick
+    patch = cv2.resize(ahead.grid / ahead.cell ** 2, (cols * ahead.cell // 4, rows * ahead.cell // 4),
+                       interpolation=cv2.INTER_CUBIC)[:h // 4, :w // 4]
+    quarter[:patch.shape[0], :patch.shape[1]] = patch
+    quarter = cv2.GaussianBlur(quarter, (0, 0), ahead.cell / 8)
+    contours, _ = cv2.findContours((quarter >= level).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = [c for c in contours if cv2.contourArea(c) >= (ahead.cell / 4) ** 2]   # skip specks
+    scale = max(w / 1600, 0.55)
+    for contour in contours:
+        points = cv2.approxPolyDP(contour, 1.0, True).reshape(-1, 2).astype(np.float32) * 4
+        _dashed(out, points, (25, 25, 25), max(4, int(5 * scale)))
+        _dashed(out, points, (255, 255, 255), max(2, int(2.5 * scale)))
+    if contours:
+        biggest = max(contours, key=cv2.contourArea).reshape(-1, 2) * 4       # label it under its lowest point,
+        x, y = biggest[np.argmax(biggest[:, 1])]                               # clear of zone tags at the top
+        text = f"crowd in {ahead.seconds:.0f} s"
+        (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55 * scale, 2)
+        x, y = int(min(max(x - tw // 2, 4), w - tw - 12)), int(min(y + th + 14, h - base - 6))
+        cv2.rectangle(out, (x - 5, y - th - 5), (x + tw + 5, y + base + 2), (25, 25, 25), -1)
+        cv2.putText(out, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55 * scale, (255, 255, 255), 2, cv2.LINE_AA)
     return out
 
 

@@ -11,12 +11,14 @@ import numpy as np
 
 from . import overlay
 from .density import DensityModel
-from .flow import Steady, crowd_flow
+from .flow import Steady, crowd_flow, people_per_cell
+from .forecast import forecast, zone_ahead
 from .risk import Status, ZoneTrend
 from .thermal import ThermalModel
 from .zones import Zone, load_zones, measure
 
 FLOW_GAP = 0.25                                # seconds between the two frames compared for movement
+OUTLINE_FLOOR = 1.0                            # people per movement cell: the forecast never outlines less
 
 
 class VideoFile:
@@ -78,11 +80,13 @@ class Webcam:
         return seconds, frame, later, time.monotonic() - self.opened - seconds
 
 
-def zone_records(statuses: dict[str, Status]) -> list[dict]:
-    """Each zone's status as plain numbers, for the timeline, the dashboard and the report."""
+def zone_records(statuses: dict[str, Status], ahead: dict[str, float] | None = None) -> list[dict]:
+    """Each zone's status as plain numbers, for the timeline, the dashboard and the report. `ahead` is each
+    zone's forecast density in 30 s, if there is one."""
     return [{"name": s.name, "people": round(s.people, 1), "density": round(s.density, 2),
              "inflow_per_min": round(s.inflow, 1), "level": s.level,
-             "minutes_to_critical": None if s.minutes_to_critical is None else round(s.minutes_to_critical, 1)}
+             "minutes_to_critical": None if s.minutes_to_critical is None else round(s.minutes_to_critical, 1),
+             "in_30s": None if ahead is None else round(ahead[s.name], 2)}
             for s in statuses.values()]
 
 
@@ -98,6 +102,7 @@ class Analyser:
         self.trends = {z.name: ZoneTrend(z.name, z.area_m2) for z in self.zones}
         self.steady = Steady()
         self.vmax = None
+        self.outline_at = None                                # people per pixel the forecast is outlined at
 
     def set_colour_scale(self, frame: np.ndarray) -> None:
         """One colour scale for a whole run, from its first frame, so colours compare across frames."""
@@ -109,12 +114,18 @@ class Analyser:
         """The annotated frame, that frame's readings as a dict, and each zone's status."""
         density = self.model.predict(frame)
         flow = self.steady.update(seconds, crowd_flow(frame, later, gap))
+        people = people_per_cell(density, flow)
+        ahead = forecast(flow, people)
         image = overlay.arrows(overlay.heatmap(frame, density, self.vmax), density, flow)
+        if self.outline_at is None:                            # half the densest crowd at the start, kept for the run
+            self.outline_at = max(0.5 * float(np.percentile(people, 99)) / flow.cell ** 2, OUTLINE_FLOOR / flow.cell ** 2)
+        image = overlay.forecast(image, ahead, self.outline_at)
         record = {"t": round(seconds, 2), "people": round(density.count, 1), "zones": []}
         statuses = {}
         if self.zones:
             statuses = {name: self.trends[name].update(seconds, r) for name, r in measure(self.zones, density, flow).items()}
             image = overlay.zones(image, self.zones, statuses)
-            record["zones"] = zone_records(statuses)
+            record["zones"] = zone_records(statuses, zone_ahead(self.zones, people, ahead,
+                                                                {n: s.density for n, s in statuses.items()}))
         caption = caption or f"{seconds:5.1f} s   about {density.count:.0f} people" + ("   (thermal)" if self.thermal else "")
         return overlay.label(image, caption), record, statuses

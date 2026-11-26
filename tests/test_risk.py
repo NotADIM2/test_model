@@ -114,3 +114,13 @@ def test_zone_head_count_is_the_density_inside_its_polygon():
     still = Flow(np.zeros((8, 8, 2), np.float32), 64)
     got = measure([zone], density, still)["Square"]
     assert got.people == pytest.approx(10, abs=0.01) and got.density == pytest.approx(2.5, abs=0.01)
+
+
+def test_a_few_seconds_of_rising_readings_at_the_start_are_not_a_trend():
+    from crowdpulse.risk import ZoneTrend
+    from crowdpulse.zones import Reading
+    trend = ZoneTrend("Staircase", 30)
+    for second in range(12):                                  # 0.84 to 0.93 people per m2: about 3 people of noise
+        density = 0.84 + 0.0082 * second
+        status = trend.update(float(second), Reading(density * 30, density, 0.0))
+    assert status.level == "green" and status.rate == 0.0

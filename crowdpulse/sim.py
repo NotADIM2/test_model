@@ -197,6 +197,21 @@ class Simulation:
             out[zone.name] = Reading(float(now_in), float(now_in / zone.area_m2), float((later_in - now_in) / LOOK_AHEAD * 60))
         return out
 
+    def crowd_grid(self, cell: int) -> tuple[np.ndarray, np.ndarray]:
+        """(people per cell, their mean velocity in pixels per second) on a grid of `cell`-pixel squares over
+        render()'s picture: what the camera's density map and movement arrows would give."""
+        rows, cols = (TOP + int(DEPTH * PX)) // cell, int(WIDTH * PX) // cell
+        people = np.zeros((rows, cols), np.float32)
+        velocity = np.zeros((rows, cols, 2), np.float32)
+        if len(self.pos):
+            px = self.pos * PX + [0, TOP]
+            r = np.clip((px[:, 1] // cell).astype(int), 0, rows - 1)
+            c = np.clip((px[:, 0] // cell).astype(int), 0, cols - 1)
+            np.add.at(people, (r, c), 1.0)
+            np.add.at(velocity, (r, c), self.vel * PX)
+            velocity /= np.maximum(people, 1.0)[..., None]
+        return people, velocity
+
     def pixel_zones(self) -> list[Zone]:
         return [Zone(z.name, z.area_m2, z.polygon * PX + [0, TOP]) for z in self.zones]
 

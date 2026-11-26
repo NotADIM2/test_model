@@ -145,6 +145,11 @@ function renderZones(record) {
     const flow = z.inflow_per_min >= 1 ? `+${Math.round(z.inflow_per_min)} people/min walking in` :
       z.inflow_per_min <= -1 ? `${Math.round(-z.inflow_per_min)} people/min leaving` : "steady";
     meta.append(`${Math.round(z.people)} people · ${flow}`);
+    if (z.in_30s !== null && z.in_30s !== undefined) {
+      const later = `in 30 s: ${z.in_30s.toFixed(1)}/m²`;
+      const worse = levelOf(z.in_30s) > levelOf(z.density);      // about to cross into amber or red
+      meta.append(" · ", worse ? el("b", "", `${later}, ${LEVELS[levelOf(z.in_30s)]}`) : later);
+    }
     if (z.minutes_to_critical !== null) {
       meta.append(" · ");
       const m = z.minutes_to_critical;
@@ -169,7 +174,9 @@ function renderAlerts(alerts) {
   $("alert-count").textContent = `(${alertCount})`;
 }
 
-function renderChart(history) {
+const levelOf = (density) => (density >= 4 ? 2 : density >= 2 ? 1 : 0);   // index into LEVELS, as in risk.py
+
+function renderChart(history, record) {
   const canvas = $("chart");
   const ratio = window.devicePixelRatio || 1;
   const width = canvas.clientWidth, height = 220;
@@ -183,7 +190,9 @@ function renderChart(history) {
 
   const left = 34, right = 8, top = 8, bottom = 24;
   const w = width - left - right, h = height - top - bottom;
-  const peak = Math.max(6, ...history.flatMap((r) => Object.values(r.zones)));
+  const ahead = {};                                 // each zone's forecast density in 30 s, if there is one
+  for (const z of record ? record.zones : []) if (z.in_30s !== null && z.in_30s !== undefined) ahead[z.name] = z.in_30s;
+  const peak = Math.max(6, ...history.flatMap((r) => Object.values(r.zones)), ...Object.values(ahead));
   const y = (d) => top + h - (d / peak) * h;
   // bands: free movement, crowded, dangerous
   for (const [from, to, colour] of [[0, 2, "#e6f4ea"], [2, 4, "#fef3c7"], [4, peak, "#fde8e8"]]) {
@@ -198,16 +207,32 @@ function renderChart(history) {
     return;
   }
   const t0 = history[0].t, t1 = history[history.length - 1].t;
-  const x = (t) => left + ((t - t0) / Math.max(t1 - t0, 1)) * w;
+  const forecastShown = Object.keys(ahead).length > 0;
+  const end = forecastShown ? t1 + 30 : t1;
+  const x = (t) => left + ((t - t0) / Math.max(end - t0, 1)) * w;
   ctx.textAlign = "center"; ctx.textBaseline = "top";
   ctx.fillText(clock(t0), left + 14, top + h + 6);
-  ctx.fillText(clock(t1), left + w - 14, top + h + 6);
+  ctx.fillText(forecastShown ? `now ${clock(t1)}` : clock(t1), forecastShown ? x(t1) : left + w - 14, top + h + 6);
+  if (forecastShown) {                              // the next 30 s, shaded, with each zone's forecast dashed
+    ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.fillRect(x(t1), top, x(end) - x(t1), h);
+    ctx.fillStyle = "#5b6475";
+    ctx.fillText("+30 s", left + w - 16, top + h + 6);
+  }
   names.forEach((name, i) => {
     ctx.strokeStyle = LINE_COLOURS[i % LINE_COLOURS.length];
     ctx.lineWidth = 2;
     ctx.beginPath();
     history.forEach((r, j) => { const p = [x(r.t), y(r.zones[name] ?? 0)]; j ? ctx.lineTo(...p) : ctx.moveTo(...p); });
     ctx.stroke();
+    if (name in ahead) {
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x(t1), y(history[history.length - 1].zones[name] ?? 0));
+      ctx.lineTo(x(end), y(ahead[name]));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   });
 }
 
@@ -258,7 +283,7 @@ async function poll() {
     renderZones(state.record);
     renderAlerts(state.alerts);
     if (state.alerts.length) lastAlert = state.alerts[state.alerts.length - 1].id;
-    renderChart(state.history);
+    renderChart(state.history, state.record);
   } catch (err) {
     $("overall").className = "pill red"; $("overall").textContent = "Offline";
     $("status").textContent = "Cannot reach the CrowdPulse server. Is scripts/dashboard.py still running?";

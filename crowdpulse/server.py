@@ -6,6 +6,7 @@ quietly driving it (starting the webcam, say) through the browser.
 """
 import json
 import queue
+import sys
 import threading
 import time
 import traceback
@@ -21,6 +22,8 @@ from .alerts import AlertLog
 from .engine import Analyser, VideoFile, Webcam, zone_records
 from .risk import ZoneTrend
 from .density import STRIDE
+from .flow import Flow
+from .forecast import forecast, zone_ahead
 from .sim import PX, STEP, Simulation
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +32,7 @@ VIDEO_DIRS = (ROOT / "data" / "videos", ROOT / "data" / "samples")
 ZONE_DIR = ROOT / "data" / "zones"
 VIDEO_TYPES = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-          "/style.css": ("style.css", "text/css; charset=utf-8")}
+          "/style.css": ("style.css", "text/css; charset=utf-8"), "/favicon.ico": ("favicon.ico", "image/x-icon")}
 FRAME_WIDTH = 1280                             # annotated frames are sent at most this wide
 SIM = "sim:stadium"
 SIM_THERMAL = "sim:stadium-thermal"
@@ -37,6 +40,7 @@ SIMS = (SIM, SIM_THERMAL)
 SIM_FRAME = 2.0                                # simulated seconds per dashboard frame
 SIM_SPEED = 5.0                                # simulated seconds per real second
 SIM_LENGTH = 20 * 60                           # the scenario runs for 20 simulated minutes
+SIM_CELL = 32                                  # pixels per movement cell in the simulation's picture (2 m)
 TIMELINE_MAX = 20_000                          # records kept for the report (about 5.5 hours at one a second)
 
 
@@ -215,8 +219,12 @@ class Monitor:
                 info = sim.info()
                 minutes, seconds = divmod(int(sim.t), 60)
                 caption = f"{minutes:02d}:{seconds:02d} simulated   {info['on_plaza']} people on the plaza"
-                image = overlay.zones(sim.render(caption), zones, statuses)
-                record = {"t": round(sim.t, 1), "people": float(info["on_plaza"]), "zones": zone_records(statuses)}
+                people, velocity = sim.crowd_grid(SIM_CELL)
+                ahead = forecast(Flow(velocity, SIM_CELL), people)
+                in_30s = zone_ahead(zones, people, ahead, {n: s.density for n, s in statuses.items()})
+                image = overlay.forecast(sim.render(caption), ahead, 3.0 / PX ** 2)    # outline at 3 people per m2
+                image = overlay.zones(image, zones, statuses)
+                record = {"t": round(sim.t, 1), "people": float(info["on_plaza"]), "zones": zone_records(statuses, in_30s)}
             self.publish(image, record, log.update(sim.t, statuses), started, info)
             self.stopping.wait(max(0.0, SIM_FRAME / SIM_SPEED - (time.monotonic() - started)))
         with self.lock:
@@ -337,8 +345,14 @@ def make_handler(monitor: Monitor, port: int):
     return Handler
 
 
+class LocalServer(ThreadingHTTPServer):
+    # On Windows, address reuse lets a second program bind the same port and take some of the requests; refuse it
+    allow_reuse_address = sys.platform != "win32"
+    daemon_threads = True
+
+
 def serve(port: int) -> ThreadingHTTPServer:
     monitor = Monitor()
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(monitor, port))
+    server = LocalServer(("127.0.0.1", port), make_handler(monitor, port))
     server.monitor = monitor
     return server
