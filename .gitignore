@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded: get them again with scripts/get_model.py and the links in data/samples/CREDITS.md
+models/
+data/samples/*.webm
+data/samples/*.mp4
+
+# Generated output
+out/
