@@ -8,6 +8,11 @@ during a victory celebration that drew far more people than the area could hold.
 
 CrowdPulse counts people. It does not recognise anyone: no faces are detected, stored or compared.
 
+**Quick start:** double-click `CrowdPulse.bat`, choose *Simulation: stadium entry surge*, press *Start*.
+The project write-up for judges, with results, is in [docs/SUBMISSION.md](docs/SUBMISSION.md).
+`.venv\Scripts\python scripts\make_demo.py` makes a 2-minute demo video, `out\crowdpulse-demo.mp4`, from
+CrowdPulse itself (a few minutes on a laptop).
+
 ## What works so far
 
 - **Density map:** a crowd-counting model turns each frame into a map of how many people stand in each patch.
@@ -127,6 +132,7 @@ Results go to `out/`. The sample videos are listed, with links, in [`data/sample
 | `CrowdPulse.bat` | Double-click to set up (first time) and start the dashboard |
 | `scripts/dashboard.py` | Starts the dashboard, after checking the setup |
 | `scripts/make_shortcut.py` | Puts a CrowdPulse shortcut on the desktop |
+| `scripts/make_demo.py` | Makes the demo video from real footage and the simulation |
 | `scripts/analyse.py` | Annotates one frame or a clip of a video |
 | `scripts/draw_zones.py` | Draw zones on a video frame by clicking |
 | `scripts/get_model.py` | Downloads the model and verifies it |

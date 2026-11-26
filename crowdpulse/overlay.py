@@ -21,8 +21,8 @@ def heatmap(frame: np.ndarray, density: Density, vmax: float | None = None) -> n
     vmax = vmax or max(float(np.percentile(grid, 99.5)), 1e-3)
     level = np.clip(cv2.resize(grid, (frame.shape[1], frame.shape[0])) / vmax, 0, 1)
     colours = cv2.applyColorMap((level * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
-    alpha = np.clip(level * 1.6, 0, 0.65)[..., None]          # empty floor stays visible
-    return (frame * (1 - alpha) + colours * alpha).astype(np.uint8)
+    alpha = np.clip(level * 1.6, 0, 0.65).astype(np.float32)  # empty floor stays visible
+    return cv2.blendLinear(frame, colours, 1 - alpha, alpha)
 
 
 def arrows(image: np.ndarray, density: Density, flow: Flow) -> np.ndarray:
